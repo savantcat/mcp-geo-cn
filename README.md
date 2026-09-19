@@ -5,6 +5,14 @@
 > 不做第二个通用 GEO 审计器 —— 国外同类已成熟（`seo-geo-mcp-server`、`growth-mcp`、`StudioMeyer GEO`），
 > 本项目把它们的评分条款在中国场景下重写，并补上中国专属部分：中国爬虫矩阵、边缘层拦截实测、中文 slug 陷阱、信源池占位、可自验报告。
 
+## 免部署直接用
+
+托管端点（Streamable HTTP，免 Key）：`https://savantcat.cn/mcp-geo`
+
+- 已在官方 MCP Registry 收录：`cn.savantcat/geo-cn`
+- Smithery: https://smithery.ai/server/@savant0196/savantcat-geo-cn
+- 自部署：见 `deploy/deploy.sh`（systemd + nginx 单 location，幂等可重跑）
+
 ## 四个工具（窄而少，意图命名）
 
 | 工具 | 作用 | 关键差异 |

@@ -1,0 +1,19 @@
+[Unit]
+Description=合尘猫 MCP Server - 中文 AI 可引用性 GEO/AEO 体检（Agent 可调用层）
+Documentation=https://savantcat.cn/mcp-geo.html
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/mcp-geo
+Environment=GEO_SEARX_URL=http://127.0.0.1:8081
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3.11 /opt/mcp-geo/server.py --transport http --host 127.0.0.1 --port 8767 --stateless
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
