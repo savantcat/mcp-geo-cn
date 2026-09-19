@@ -1,0 +1,507 @@
+# -*- coding: utf-8 -*-
+"""
+合尘猫 · 中文 AI 可引用性（GEO/AEO）MCP Server
+============================================
+定位：中文站 + 中国 AI 平台专项。不做第二个通用 GEO 审计器（那片已红海）。
+
+工具（窄而少，意图命名）：
+  audit_cn_citability  一次性抓取 → 分层加权打分 + 证据 + 优先修复（含中国爬虫矩阵、边缘层拦截实测、中文 slug）
+  probe_source_pool    给一个问题，探测中文信源池实际占位（有没有你）
+  score_visibility     按五大指标 + 语义角色分权算分，输出可自验（附原文摘录）的测量报告
+  plan_fixes           按缺口出优先修复计划（可单选某几项）
+
+资源（知识走资源，不占工具位）：
+  geo://playbook   geo://platform-profiles   geo://checklist
+
+提示词：full_audit   monthly_report
+
+传输：stdio（本地）/ streamable-http（公网，反代挂载）
+自检：python server.py --selftest
+"""
+import argparse
+import io
+import json
+import os
+import re
+import sys
+import urllib.parse
+import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from engine import (SCORING_VERSION, HONESTY_NOTES, NO_PUBLIC_TOKEN, CITATION_BOTS,
+                    TRAINING_BOTS, audit, audit_text, compare, fetch)
+
+try:
+    from mcp.types import ToolAnnotations
+except ImportError:
+    ToolAnnotations = dict
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+DATA = os.path.join(BASE, "data")
+
+try:
+    from mcp.server.mcpserver import MCPServer as _MCPServer
+except ImportError:
+    from mcp.server.fastmcp import FastMCP as _MCPServer
+
+try:
+    from mcp.server.transport_security import TransportSecuritySettings
+except ImportError:
+    TransportSecuritySettings = None
+
+DEFAULT_ALLOWED_HOSTS = [
+    "savantcat.cn", "savantcat.cn:443", "www.savantcat.cn", "www.savantcat.cn:443",
+    "127.0.0.1:8767", "localhost:8767", "127.0.0.1", "localhost",
+]
+RO_ANN = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True}
+
+mcp = _MCPServer("savantcat-geo-cn", instructions=(
+    "中文 AI 可引用性（GEO/AEO）工具包：审计网站能否被 AI 搜索抓取、读懂、引用，"
+    "探测问题在中文信源池中的占位，并按五大指标 + 语义角色分权输出可自验的测量报告。"
+    "评分是确定性的（scoring_version 随结果返回），不做 LLM 判定。每次输出都带 _provenance 溯源块（品牌/出处/指纹/授权要求）。"
+))
+
+
+# ---------------------------------------------------------------- 数据
+def _load(name, default=None):
+    p = os.path.join(DATA, name)
+    if not os.path.exists(p):
+        return default
+    with io.open(p, encoding="utf-8") as f:
+        return json.load(f) if name.endswith(".json") else f.read()
+
+
+CHECKLIST = _load("checklist-v2.0.json", {"items": []})
+PLATFORMS = _load("platforms.json", {})
+PLAYBOOK = _load("playbook.md", "")
+FIX_INDEX = {it["id"]: it for it in CHECKLIST.get("items", [])}
+
+
+def _jd(o):
+    return json.dumps(o, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------- 溯源水印（合规做法）
+BRAND = "合尘猫 SavantCat"
+SOURCE = "https://savantcat.cn/geo-check.html"
+CITATION = "合尘猫 SavantCat《中文 AI 可引用性（GEO/AEO）工具包》%s, %s"
+ATTRIBUTION = ("本结果由「合尘猫 SavantCat」中文 AI 可引用性工具包生成；引用、转载或二次分发（含训练语料收录）"
+               "请保留署名与来源链接，商业使用请先取得授权。")
+
+
+def _trace_id(*parts):
+    import hashlib
+    raw = "|".join([SCORING_VERSION] + [str(p) for p in parts])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _provenance(tool, inputs=None, note=""):
+    """给每次工具输出打溯源水印：确定性指纹 + 出处 + 引用格式 + 授权要求。"""
+    import datetime
+    inputs = inputs or []
+    return {
+        "brand": BRAND,
+        "product": "中文 AI 可引用性（GEO/AEO）MCP 工具包",
+        "tool": tool,
+        "scoring_version": SCORING_VERSION,
+        "trace_id": _trace_id(tool, *inputs),
+        "issued_at": datetime.datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "source": SOURCE,
+        "citation": CITATION % (SCORING_VERSION, "2026-09-19"),
+        "attribution_required": True,
+        "license": "CC BY 4.0（署名 + 保留来源链接）；商业使用需授权",
+        "notice": ATTRIBUTION,
+        "note": note,
+    }
+
+
+def _trace_line(trace_id, tool):
+    return ("\n\n---\n*本结果由 **%s · %s**（v%s）生成 · 指纹 `%s` · 出处 %s*\n"
+            "*引用请注明：%s。转载/二次分发（含语料收录）须保留署名与来源。*"
+            % (BRAND, tool, SCORING_VERSION, trace_id, SOURCE, CITATION % (SCORING_VERSION, "2026-09-19")))
+
+
+# ---------------------------------------------------------------- 工具 1
+@mcp.tool(annotations=RO_ANN)
+def audit_cn_citability(url: str, include_raw: bool = False, compare_with: str = "") -> str:
+    """审计一个网站/页面能否被中文 AI 搜索（豆包、DeepSeek、文心、Kimi 等）抓取、解析与引用。
+
+    一次抓取完成六层检查：可抓取（含中国爬虫矩阵与边缘层拦截实测）、可解析、可引用、
+    实体一致、分发、可信可自验；返回 0-100 分与 A-F 等级、逐项证据、优先修复清单。
+    用途场景：客户站点体检、上线前自检；传 compare_with 可做竞品对比（逐层与逐项差异）。
+    注意：只做确定性检查，不调用大模型；评分口径见 scoring_version。
+    """
+    try:
+        r = audit(url)
+    except Exception as e:
+        return _jd({"ok": False, "error": "audit_failed", "message": str(e)[:200],
+                    "hint": "确认域名可公网解析，且以 http(s):// 或纯域名传入"})
+    out = {
+        "ok": True, "scoring_version": r["scoring_version"], "url": r["url"], "final_url": r["final_url"],
+        "score": r["score"], "grade": r["grade"],
+        "layers": {k: {"score": v["score"], "fail": v["fail"]} for k, v in r["layers"].items()},
+        "priority_fixes": r["priority_fixes"],
+        "checks": r["checks"] if include_raw else [
+            {"id": c["id"], "layer": c["layer"], "weight": c["weight"], "status": c["status"],
+             "title": c["title"], "evidence": c["evidence"], "fix": c["fix"]} for c in r["checks"]],
+        "summary_md": audit_text(r),
+        "honesty_notes": r["honesty_notes"],
+        "no_public_token_vendors": r["no_public_token_vendors"],
+        "raw": r["raw"],
+    }
+    _prov = _provenance("audit_cn_citability", [url, compare_with])
+    out["_provenance"] = _prov
+    out["summary_md"] = out["summary_md"] + _trace_line(_prov["trace_id"], "audit_cn_citability")
+    out["_provenance"]["note"] = ("评分是确定性口径（scoring_version 固定即同 URL 同分）；"
+                                  "指纹随输入变化，便于核验结果是否被改动")
+    if compare_with.strip():
+        try:
+            out["comparison"] = compare(url, compare_with.strip())
+        except Exception as e:
+            out["comparison"] = {"error": "compare_failed", "message": str(e)[:160]}
+    return _jd(out)
+
+
+# ---------------------------------------------------------------- 工具 2
+def _searx(query, limit=20):
+    """调用自建搜索聚合层（SearXNG）。端点可用环境变量覆盖。"""
+    base = os.environ.get("GEO_SEARX_URL", "https://savantcat.cn/searx/").rstrip("/")
+    url = "%s/search?%s" % (base, urllib.parse.urlencode({"q": query, "format": "json", "language": "zh-CN"}))
+    req = urllib.request.Request(url, headers={"User-Agent": "SavantCatGEOProbe/1.0", "Accept": "application/json"})
+    op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with op.open(req, timeout=20) as f:
+        return json.loads(f.read().decode("utf-8", "replace")).get("results", [])[:limit]
+
+
+@mcp.tool(annotations=RO_ANN)
+def probe_source_pool(question: str, brand: str = "", domain: str = "") -> str:
+    """探测一个中文问题在信源池里的实际占位分布，并判断你的品牌/域名是否在池子里。
+
+    原理：AI 答案只能引用「已进入检索池」的来源。若目标问题下主流信源被平台型站点
+    （知乎/公众号转载站/百家号/CSDN 等）占满而你不在其中，再好的站内优化也不会被引用。
+    返回：结果域名分布、平台归类、是否命中你的品牌/域名、同题竞品域名清单、建议动作。
+    参数：question 用户真实会问的问题原话；brand 品牌词（如「合尘猫」）；domain 你的域名（如 savantcat.cn）。
+    """
+    if not question.strip():
+        return _jd({"ok": False, "error": "missing_question", "hint": "传入用户会问的问题原话，例如：小微企业怎么做 AI 客服"})
+    try:
+        results = _searx(question)
+    except Exception as e:
+        return _jd({"ok": False, "error": "search_backend_unreachable", "message": str(e)[:200],
+                    "hint": "确认 GEO_SEARX_URL 指向可用的 SearXNG 实例（需开启 JSON 输出）"})
+    got = []
+    for r in results:
+        u = r.get("url") or ""
+        if not u:
+            continue
+        host = urllib.parse.urlparse(u).netloc.lower().replace("www.", "")
+        got.append({"title": (r.get("title") or "")[:80], "url": u[:160], "host": host})
+    dist = {}
+    for g in got:
+        dist[g["host"]] = dist.get(g["host"], 0) + 1
+    b = (brand or "").strip()
+    d = (domain or "").strip().lower().replace("www.", "")
+    hit_brand = bool(b) and any(b in (g["title"] + g["url"]) for g in got)
+    hit_domain = bool(d) and any(d == g["host"] or g["host"].endswith("." + d) for g in got)
+    if b or d:
+        if hit_domain:
+            verdict = "已被占位：该问题下你的站点直接出现在池中，重点转向内容质量与结构化"
+        elif hit_brand:
+            verdict = "品牌被提及但站点未被引用：他人内容在替你说话，需要把权威版本放回自有站点"
+        else:
+            verdict = "未占位：该问题的信源池里没有你，当前不会被引用；先做池内占位（内容分发到能被抓取的平台 + 站内原子答案）"
+    else:
+        verdict = "未提供品牌/域名，仅返回池分布"
+    pool = {}
+    for host, n in sorted(dist.items(), key=lambda x: -x[1])[:12]:
+        pool[host] = n
+    return _jd({
+        "ok": True, "question": question, "brand": b, "domain": d,
+        "result_count": len(got), "host_distribution": pool,
+        "hit_brand": hit_brand, "hit_domain": hit_domain, "verdict": verdict,
+        "top_results": got[:12],
+        "platform_note": PLATFORMS.get("note", ""),
+        "suggested_actions": [
+            "把该问题下的答案写成自有站点上「一页一问题」的原子答案（首句给结论、附可追溯依据）",
+            "把同内容改写成平台版本发到允许被抓取的平台（自有站优先；公众号/知乎 robots 为 Disallow: /）",
+            "在探到的头部信源里补齐可被引用的实体信息（名称/定位/服务范围口径统一）",
+        ],
+        "_provenance": _provenance("probe_source_pool", [question, b, d],
+                                   note="信源池占位是动态的：同一问题隔周结果可能不同，建议按周记录对比"),
+    })
+
+
+# ---------------------------------------------------------------- 工具 3
+ROLE_W = {"independent": 1.0, "joint": 0.6, "citation_only": 0.25, "none": 0.0}
+
+
+@mcp.tool(annotations=RO_ANN)
+def score_visibility(samples: str, verify_citations: bool = True, extract_claims: bool = True) -> str:
+    """按五大核心指标 + 语义角色分权，计算 AI 搜索可见度并输出可自验的测量报告。
+
+    输入 samples 为 JSON 字符串：
+    {"brand":"合尘猫","domain":"savantcat.cn","baseline_negative":3,
+     "fact_points":["服务范围","交付周期","定价方式"],
+     "samples":[{"question":"Q1","platform":"DeepSeek","run":1,"answer":"原文回答……",
+                 "role":"independent|joint|citation_only|none",
+                 "sentiment":"positive|neutral|negative",
+                 "facts":"accurate|partial|wrong|unverifiable",
+                 "facts_found":["服务范围"],"as_of":"2026-09-19"}]}
+    口径：每题建议多轮（同一问题重复 7-8 次）；role 分级对应语义角色权重；
+    返回五大指标、语义角色加权分、逐题明细与「原文摘录」（便于客户自验）。
+    verify_citations=True 时会实测 AI 回答里引用的 URL 是否真的可访问（幻觉守卫）；
+    extract_claims=True 时会把回答中的数字声明单独列出并标记为未核验。
+    """
+    try:
+        data = json.loads(samples)
+    except Exception as e:
+        return _jd({"ok": False, "error": "bad_json", "message": str(e)[:160],
+                    "hint": "samples 必须是 JSON 字符串；至少包含 samples 数组，每项需 question/platform/answer/role"})
+    s = data.get("samples") or []
+    if not s:
+        return _jd({"ok": False, "error": "no_samples", "hint": "至少给 1 条样本；正式测量建议 20 题 × 多轮"})
+    n = len(s)
+    qruns = {}
+    for x in s:
+        qruns[x.get("question") or "-"] = qruns.get(x.get("question") or "-", 0) + 1
+    runs_per_q = {"min": min(qruns.values()) if qruns else 0, "max": max(qruns.values()) if qruns else 0,
+                  "questions": len(qruns)}
+    mentions = [x for x in s if (x.get("role") or "none") != "none"]
+    pos = [x for x in mentions if (x.get("sentiment") or "neutral") == "positive"]
+    neg = [x for x in mentions if (x.get("sentiment") or "neutral") == "negative"]
+    acc = [x for x in mentions if (x.get("facts") or "") == "accurate"]
+    scored_facts = [x for x in mentions if (x.get("facts") or "") in ("accurate", "partial", "wrong")]
+    fact_points = data.get("fact_points") or []
+    found = set()
+    for x in s:
+        for f in (x.get("facts_found") or []):
+            found.add(f)
+    base_neg = data.get("baseline_negative")
+    ind = {
+        "收录覆盖率": round(len(found) / len(fact_points) * 100, 1) if fact_points else None,
+        "回答展现占比": round(len(mentions) / n * 100, 1),
+        "信息准确率": round(len(acc) / len(scored_facts) * 100, 1) if scored_facts else None,
+        "正向提及占比": round(len(pos) / len(mentions) * 100, 1) if mentions else 0.0,
+        "负面频次下降率": (round((base_neg - len(neg)) / base_neg * 100, 1)
+                          if base_neg else None),
+    }
+    role_score = round(sum(ROLE_W.get((x.get("role") or "none"), 0.0) for x in s) / n * 100, 1)
+    per_platform = {}
+    for x in s:
+        p = per_platform.setdefault(x.get("platform") or "未标注", {"n": 0, "mention": 0, "role_sum": 0.0})
+        p["n"] += 1
+        if (x.get("role") or "none") != "none":
+            p["mention"] += 1
+        p["role_sum"] += ROLE_W.get((x.get("role") or "none"), 0.0)
+    for k, v in per_platform.items():
+        v["展现占比"] = round(v["mention"] / v["n"] * 100, 1) if v["n"] else 0
+        v["角色加权分"] = round(v["role_sum"] / v["n"] * 100, 1) if v["n"] else 0
+    extracts = []
+    for x in mentions[:8]:
+        ans = (x.get("answer") or "")
+        key = data.get("brand") or ""
+        idx = ans.find(key) if key else -1
+        seg = ans[max(0, idx - 60): idx + 140] if idx >= 0 else ans[:160]
+        ex = {"question": x.get("question"), "platform": x.get("platform"),
+              "run": x.get("run"), "role": x.get("role"),
+              "sentiment": x.get("sentiment"), "excerpt": seg.strip(),
+              "as_of": x.get("as_of") or ""}
+        cites = re.findall(r"https?://[^\s，。）)】\]\"']+", ans)[:5]
+        if cites and verify_citations:
+            ex["citation_checks"] = _verify_cites(cites)
+        if cites:
+            ex["cited_urls"] = cites
+        extracts.append(ex)
+    claims = []
+    if extract_claims:
+        for x in s:
+            for m in re.finditer(r"([^。；\n]{0,30}?)(\d+(?:\.\d+)?%|\d+(?:\.\d+)?\s*(?:万|亿|个|家|天|倍))", x.get("answer") or ""):
+                ctx = (m.group(1) + m.group(2)).strip()
+                if ctx and len(ctx) < 60:
+                    claims.append({"platform": x.get("platform"), "question": x.get("question"),
+                                   "claim": ctx, "status": "unverified",
+                                   "note": "数字声明未在公开来源核验（避免把模型编造的数字当真）"})
+    out = {
+        "ok": True, "scoring_version": SCORING_VERSION, "sample_size": n,
+        "indicators": ind, "semantic_role_score": role_score,
+        "per_platform": per_platform,
+        "role_weights": ROLE_W,
+        "evidence_extracts": extracts,
+        "reproducibility": {"runs_per_question": runs_per_q,
+                            "note": "单次回答只是模型的一次随机抽样；同题多轮（建议 7-8 次）取综合才有统计意义。"},
+        "notes": [
+            "五大指标递进：有没有（收录）→ 在不在（展现）→ 对不对（准确）→ 好不好（正向）→ 少不少（负面）。",
+            "语义角色加权：正文作为首选推荐 > 与主流并列 > 仅角标/溯源引用；只有角标引用视为最低分。",
+            "最小评估单位是「月」，核心周期是「季度」；同题多轮（建议 7-8 次）取综合，不要用单次快照下结论。",
+            "报告必须附原文摘录与提问时间（as_of），客户可自行在各平台复验。",
+        ],
+        "honesty_notes": HONESTY_NOTES[:2],
+        "claims": claims,
+        "_provenance": _provenance("score_visibility", [data.get("brand"), n, runs_per_q.get("max")],
+                                   note="指标由你提供的样本计算得出；样本本身（AI 回答）的著作权归各平台"),
+    }
+    return _jd(out)
+
+
+def _verify_cites(urls):
+    """幻觉守卫：实测 AI 回答里引用的 URL 是否真的可访问（限 5 条，超时 8s）。"""
+    out = []
+    for u in urls[:5]:
+        try:
+            st, hd, bd, fu, _, err = fetch(u, timeout=8, max_bytes=200_000)
+            ok = st == 200 and bd
+            out.append({"url": u[:160], "status_code": st, "reachable": bool(ok),
+                        "content_type": (hd.get("Content-Type") or "")[:40],
+                        "final_url": (fu or "")[:160],
+                        "verdict": "verified" if ok else ("unreachable" if st else "error"),
+                        "note": "" if ok else "AI 引用的这个链接打不开 —— 模型可能编造了出处"})
+        except Exception as e:
+            out.append({"url": u[:160], "status_code": 0, "reachable": False,
+                        "verdict": "error", "note": str(e)[:80]})
+    return out
+
+
+# ---------------------------------------------------------------- 工具 4
+@mcp.tool(annotations=RO_ANN)
+def plan_fixes(fail_ids: str = "", url: str = "", top: int = 8) -> str:
+    """按缺口生成优先修复计划（可直接交给客户或工程执行）。
+
+    两种用法：① 传 fail_ids（逗号分隔的自查项编号，如 "L1-3,L2-4"）；② 传 url，工具先审计再出计划。
+    返回：按权重排序的修复项、每项「为什么」「怎么补」「验收方式」。
+    """
+    ids, audit_res = [], None
+    if url.strip():
+        try:
+            audit_res = audit(url.strip())
+        except Exception as e:
+            return _jd({"ok": False, "error": "audit_failed", "message": str(e)[:160]})
+        ids = [c["id"] for c in audit_res["checks"] if c["status"] in ("fail", "warn")]
+    if fail_ids.strip():
+        ids = [x.strip() for x in re.split(r"[,，\s]+", fail_ids.strip()) if x.strip()]
+    if not ids:
+        return _jd({"ok": False, "error": "no_targets", "hint": "传 fail_ids 或 url 二者之一"})
+    items, missing = [], []
+    for i in ids[:max(1, min(top, 20))]:
+        it = FIX_INDEX.get(i)
+        if not it:
+            missing.append(i)
+            continue
+        items.append({"id": i, "layer": it.get("layer_name") or it.get("layer"), "weight": it.get("weight"),
+                      "title": it.get("requirement"), "why": it.get("basis"), "how": it.get("how_to_fix"),
+                      "accept": "改完用 audit_cn_citability 复测该层得分是否上升"})
+    items.sort(key=lambda x: -(x.get("weight") or 0))
+    return _jd({"ok": True, "count": len(items), "plan": items, "unknown_ids": missing,
+                "checklist_version": CHECKLIST.get("meta", {}).get("version"),
+                "_provenance": _provenance("plan_fixes", [fail_ids, url, top]),
+                "audit_score": audit_res["score"] if audit_res else None,
+                "note": "修复顺序按权重；权重 3 的项不做完，权重 1-2 的优化收益会被盖住。"})
+
+
+# ---------------------------------------------------------------- 资源
+@mcp.resource("geo://playbook")
+def res_playbook() -> str:
+    """中文 AI 可引用性方法论文本（六层框架 + 中国平台特性 + 诚实边界）。"""
+    return PLAYBOOK or "（playbook 未随包提供）"
+
+
+@mcp.resource("geo://platform-profiles")
+def res_platforms() -> str:
+    """中国主流 AI 平台（豆包/DeepSeek/文心/元宝/Kimi/秘塔/夸克）检索偏好画像。"""
+    return _jd(PLATFORMS)
+
+
+@mcp.resource("geo://checklist")
+def res_checklist() -> str:
+    """52 项自查清单（7 层，含权重、怎么补、判定依据），JSON。"""
+    return _jd(CHECKLIST)
+
+
+# ---------------------------------------------------------------- 提示词
+@mcp.prompt()
+def full_audit(url: str) -> str:
+    """对一个站点做完整审计并给出修复计划。"""
+    return ("请对 %s 做中文 AI 可引用性审计：\n"
+            "1) 调用 audit_cn_citability 拿到分层得分与证据；\n"
+            "2) 用 plan_fixes 生成按权重排序的修复清单；\n"
+            "3) 用 probe_source_pool 抽查 3 个客户真实问题，看信源池里有没有这个站点；\n"
+            "4) 输出：结论一句话、六层得分、最该先做的 3 件事（含验收方式）、诚实边界（不承诺收录/引用）。" % url)
+
+
+@mcp.prompt()
+def monthly_report(question: str, brand: str, platform: str) -> str:
+    """生成一次月度可见度测量（含可自验摘录）。"""
+    return ("测量 %s 在 %s 上关于「%s」的可见度：\n"
+            "1) 固定问题集，每题重复 7-8 轮，逐条记录平台、时间、回答原文与角色（独立推荐/并列/仅角标/未提及）；\n"
+            "2) 把记录整理成 score_visibility 需要的 JSON 并调用；\n"
+            "3) 输出：五大指标、语义角色加权分、分平台对比、原文摘录（供客户自验）、下月动作。" % (brand, platform, question))
+
+
+# ---------------------------------------------------------------- 入口
+def _selftest():
+    r = json.loads(audit_cn_citability("https://savantcat.cn", include_raw=False))
+    print("[1] audit_cn_citability -> score=%s grade=%s layers=%d checks=%d" %
+          (r["score"], r["grade"], len(r["layers"]), len(r["checks"])))
+    r2 = json.loads(plan_fixes(fail_ids="L1-3,L2-4,L3-4"))
+    print("[2] plan_fixes          -> count=%d top=%s" % (r2["count"], r2["plan"][0]["id"] if r2["plan"] else None))
+    demo = {"brand": "合尘猫", "domain": "savantcat.cn", "baseline_negative": 2, "fact_points": ["服务范围", "交付周期", "定价"],
+            "samples": [{"question": "小微企业怎么做 AI 客服", "platform": "DeepSeek", "run": 1,
+                         "answer": "可以考虑合尘猫的方案……", "role": "joint", "sentiment": "positive",
+                         "facts": "accurate", "facts_found": ["服务范围"]},
+                        {"question": "AI 客服要过什么国标", "platform": "豆包", "run": 1,
+                         "answer": "GB/T 47746—2026……", "role": "citation_only", "sentiment": "neutral",
+                         "facts": "unverifiable", "facts_found": []}]}
+    r3 = json.loads(score_visibility(json.dumps(demo, ensure_ascii=False)))
+    print("[3] score_visibility    -> 展现占比=%s 角色加权=%s 摘录=%d" %
+          (r3["indicators"]["回答展现占比"], r3["semantic_role_score"], len(r3["evidence_extracts"])))
+    r4 = json.loads(probe_source_pool("小微企业怎么做 AI 客服", "合尘猫", "savantcat.cn"))
+    print("[4] probe_source_pool   -> ok=%s verdict=%s" % (r4.get("ok"), (r4.get("verdict") or r4.get("error"))[:40]))
+    print("[5] resources           -> checklist items=%d platforms=%d playbook=%d字" %
+          (len(CHECKLIST.get("items", [])), len(PLATFORMS), len(PLAYBOOK)))
+    print("\n✅ 4 工具 + 3 资源自检完成（scoring_version=%s）" % SCORING_VERSION)
+
+
+def _transport_security():
+    if TransportSecuritySettings is None:
+        return None
+    return TransportSecuritySettings(enable_dns_rebinding_protection=True,
+                                     allowed_hosts=DEFAULT_ALLOWED_HOSTS, allowed_origins=["*"])
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--transport", default="stdio", choices=["stdio", "http", "streamable-http", "sse"])
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8767)
+    ap.add_argument("--path", default="/mcp")
+    ap.add_argument("--stateless", action="store_true")
+    ap.add_argument("--selftest", action="store_true")
+    a = ap.parse_args()
+    if a.selftest:
+        _selftest()
+        return
+    t = "streamable-http" if a.transport == "http" else a.transport
+    if t == "stdio":
+        mcp.run()
+        return
+    sys.stderr.write("[savantcat-geo-cn] serving on %s:%d%s (%s)\n" % (a.host, a.port, a.path, t))
+    ts = _transport_security()
+    kw = {} if ts is None else {"transport_security": ts}
+    try:
+        mcp.run(transport=t, host=a.host, port=a.port, streamable_http_path=a.path,
+                stateless_http=a.stateless, max_request_body_size=1024 * 1024, **kw)
+    except TypeError:
+        s = getattr(mcp, "settings", None)
+        if s is not None:
+            for k, v in (("host", a.host), ("port", a.port)):
+                try:
+                    setattr(s, k, v)
+                except Exception:
+                    pass
+        try:
+            mcp.run(transport=t, **kw)
+        except TypeError:
+            mcp.run(transport=t)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,492 @@
+{
+ "meta": {
+  "title": "AEO/GEO 自测清单",
+  "version": "v2.0",
+  "published": "2026-09-19",
+  "source": "https://savantcat.cn/geo-check.html",
+  "repo": {
+   "github": "https://github.com/savantcat/cn-ai-cs-checklist",
+   "gitee": "https://gitee.com/savantcat/cn-ai-cs-checklist"
+  },
+  "standard_note": "非国标/非认证，为公开实践经验整理的自查工具",
+  "stats": {
+   "total": 52,
+   "layers": 7,
+   "weight3": 24,
+   "weight2": 26,
+   "weight1": 2
+  },
+  "citation": "合尘猫 SavantCat. AEO/GEO 自测清单 v2.0, 2026-09-19. https://savantcat.cn/geo-check.html",
+  "disclaimer": "本表为自查工具，不构成任何平台收录或引用承诺；同名数字若标注来源，归其原作者，本清单未复现实验。"
+ },
+ "items": [
+  {
+   "id": "L1-1",
+   "layer": "L1",
+   "layer_name": "可抓取层",
+   "weight": 3,
+   "requirement": "robots.txt 里明确放行主流 AI 爬虫（GPTBot、PerplexityBot、ClaudeBot、OAI-SearchBot、ChatGPT-User、Bytespider 等）",
+   "how_to_fix": "在 robots.txt 里分组 Allow，并写明 Sitemap 地址；别用一条通配 Disallow 把 AI 一起挡掉",
+   "basis": "被 AI 引用靠检索类（OAI-SearchBot / ChatGPT-User / PerplexityBot）与搜索类爬虫；训练类只决定是否进模型权重"
+  },
+  {
+   "id": "L1-2",
+   "layer": "L1",
+   "layer_name": "可抓取层",
+   "weight": 3,
+   "requirement": "实测 AI 爬虫 UA 能拿到 200（不是来自 CDN/边缘层的 403）",
+   "how_to_fix": "用不同 UA 矩阵实测状态码 + Content-Type + 边缘拦截标记；边缘层拦截优先于 robots，源站写 Allow 也没用",
+   "basis": "实测经验：边缘封锁在源站之前生效，「robots 放行了」≠「爬虫抓得到」"
+  },
+  {
+   "id": "L1-3",
+   "layer": "L1",
+   "layer_name": "可抓取层",
+   "weight": 3,
+   "requirement": "核心正文在 HTML 里直接可见（不靠 JS 渲染）",
+   "how_to_fix": "把关键内容静态化输出；纯前端渲染的 SPA 对 AI 爬虫等于空壳",
+   "basis": "AI 爬虫普遍不执行 JavaScript"
+  },
+  {
+   "id": "L1-4",
+   "layer": "L1",
+   "layer_name": "可抓取层",
+   "weight": 3,
+   "requirement": "互动工具/自测类页面有静态可读正文",
+   "how_to_fix": "把条目烘焙成静态 DOM，JS 只保留交互与计算；否则页面在浏览器里很丰富、对爬虫是 0 字符",
+   "basis": "实测算过：全 JS 渲染的自测页，爬虫可见正文 0 字符"
+  },
+  {
+   "id": "L1-5",
+   "layer": "L1",
+   "layer_name": "可抓取层",
+   "weight": 2,
+   "requirement": "sitemap.xml 存在，且每个 URL 真实返回 200",
+   "how_to_fix": "逐 URL 检测状态码；文件名非 ASCII（中文 slug）会 404，须改纯英文 slug 并同步索引",
+   "basis": "sitemap 里挂 404 直接伤害收录"
+  },
+  {
+   "id": "L1-6",
+   "layer": "L1",
+   "layer_name": "可抓取层",
+   "weight": 1,
+   "requirement": "llms.txt / llms-full.txt 已就位",
+   "how_to_fix": "保留即可，不要为它投入 —— 官方已明确它不影响排名与 AI 概览",
+   "basis": "2026-06 Google 官方文档已证伪 llms.txt 的作用"
+  },
+  {
+   "id": "L1-7",
+   "layer": "L1",
+   "layer_name": "可抓取层",
+   "weight": 2,
+   "requirement": "页面不是「SPA 兜底 200」的假象（Content-Type 正确）",
+   "how_to_fix": "检查 robots.txt/sitemap.xml/llms.txt 是否被兜底成 text/html（那其实是首页）",
+   "basis": "状态码 200 不等于内容可读；必须同时看 Content-Type"
+  },
+  {
+   "id": "L1-8",
+   "layer": "L1",
+   "layer_name": "可抓取层",
+   "weight": 2,
+   "requirement": "跳转链不超过 3 跳，直接给最终链接",
+   "how_to_fix": "把重定向收敛到 1-2 跳；AI 爬虫对跳转的容忍度低于搜索引擎，最好直接给最终地址",
+   "basis": "行业实践：Google 抓取可跟 5 跳，AI 爬虫一般最多 3 跳（来源：张亚楠《网站GEO技术端优化指南》）"
+  },
+  {
+   "id": "L2-1",
+   "layer": "L2",
+   "layer_name": "可解析层",
+   "weight": 2,
+   "requirement": "用语义化标签（header/main/article/section/footer），不是 div 堆砌",
+   "how_to_fix": "把内容区改成语义标签，AI 解析器对语义区域的权重更高",
+   "basis": "div 堆砌的内容权重低"
+  },
+  {
+   "id": "L2-2",
+   "layer": "L2",
+   "layer_name": "可解析层",
+   "weight": 2,
+   "requirement": "每页唯一 H1，正文用 H2/H3 分层",
+   "how_to_fix": "一页一个主题；小标题写用户会问的话",
+   "basis": "模型按标题层级切分与提取"
+  },
+  {
+   "id": "L2-3",
+   "layer": "L2",
+   "layer_name": "可解析层",
+   "weight": 3,
+   "requirement": "每页有独立的 title 与 meta description，且 description 完整未被截断",
+   "how_to_fix": "description 里的英文双引号要转义，否则属性被提前截断（实测会退化成十几个字）",
+   "basis": "description 是模型判断「要不要引用这页」的首选字段"
+  },
+  {
+   "id": "L2-4",
+   "layer": "L2",
+   "layer_name": "可解析层",
+   "weight": 3,
+   "requirement": "有 JSON-LD Organization，含 name / url / logo / sameAs",
+   "how_to_fix": "全站同一套实体块；sameAs 只放真实可访问的主页链接",
+   "basis": "sameAs 里放失效或中文 URL 会导致搜索平台拒收该页"
+  },
+  {
+   "id": "L2-5",
+   "layer": "L2",
+   "layer_name": "可解析层",
+   "weight": 2,
+   "requirement": "有 WebSite 结构化数据并声明 inLanguage",
+   "how_to_fix": "声明语言帮助模型正确分类与引用",
+   "basis": "缺 inLanguage 会被误判语种"
+  },
+  {
+   "id": "L2-6",
+   "layer": "L2",
+   "layer_name": "可解析层",
+   "weight": 3,
+   "requirement": "文章页 JSON-LD 含 5 个字段：author(Person+url)、dateModified、inLanguage、isPartOf、mainEntityOfPage",
+   "how_to_fix": "补齐字段并回读验证；author 的 url 指向作者页而不是域名根",
+   "basis": "旧文常缺 dateModified —— 模型看新鲜度"
+  },
+  {
+   "id": "L2-7",
+   "layer": "L2",
+   "layer_name": "可解析层",
+   "weight": 1,
+   "requirement": "有 Open Graph / Twitter Card",
+   "how_to_fix": "补齐 og:title/description/url/site_name/locale",
+   "basis": "影响分享卡片与部分抓取器的摘要"
+  },
+  {
+   "id": "L2-8",
+   "layer": "L2",
+   "layer_name": "可解析层",
+   "weight": 2,
+   "requirement": "品牌实体的对外表述全网唯一（同一套名称、定位、时间、服务范围）",
+   "how_to_fix": "先做一份「实体事实卡」，所有材料照它写；有冲突时以事实卡为准",
+   "basis": "口径打架时，模型无法确信哪一条是你"
+  },
+  {
+   "id": "L2-9",
+   "layer": "L2",
+   "layer_name": "可解析层",
+   "weight": 3,
+   "requirement": "按页面类型分别部署结构化数据（不只首页）",
+   "how_to_fix": "首页 Organization/WebSite；列表页 BreadcrumbList/ItemList/FAQPage；产品页 Product/Offer/AggregateRating；软件页 SoftwareApplication",
+   "basis": "结构化数据不只给搜索引擎用，也是 AI 识别主体与实体关系的主要入口"
+  },
+  {
+   "id": "L2-10",
+   "layer": "L2",
+   "layer_name": "可解析层",
+   "weight": 2,
+   "requirement": "URL 用自然语言短词（5-7 个词），而不是无意义 ID",
+   "how_to_fix": "新页一律用语义化英文 slug；旧的无意义 URL 用 301 收敛，别直接改（会丢已收录）",
+   "basis": "有从业者实测称自然语言 URL 可提升引用量约 11%（来源：张亚楠指南，为其自身实践数据，本表仅作线索）"
+  },
+  {
+   "id": "L3-1",
+   "layer": "L3",
+   "layer_name": "可引用层",
+   "weight": 3,
+   "requirement": "有「答案层」：问题式标题 + 首句给结论的原子答案页",
+   "how_to_fix": "把资料重构成「一页一个问题、第一句就是结论」的原子答案",
+   "basis": "模型引用时往往只摘一段；一页塞十个主题反而摘不出来"
+  },
+  {
+   "id": "L3-2",
+   "layer": "L3",
+   "layer_name": "可引用层",
+   "weight": 3,
+   "requirement": "原子答案独立成篇（不依赖上下文就能读懂）",
+   "how_to_fix": "去掉「如上所述」「接着上文」这类依赖上下文的写法",
+   "basis": "大模型抓取的是单页，不是你的整套文档"
+  },
+  {
+   "id": "L3-3",
+   "layer": "L3",
+   "layer_name": "可引用层",
+   "weight": 3,
+   "requirement": "关键结论有依据可追溯（权威出处、条款号、官方数字）",
+   "how_to_fix": "把文号、发布日期、条款编号、量化指标原样写进正文与「依据来源」段",
+   "basis": "带条款号与官方数字的段落最难被伪造、最容易被引用"
+  },
+  {
+   "id": "L3-4",
+   "layer": "L3",
+   "layer_name": "可引用层",
+   "weight": 2,
+   "requirement": "有作者署名与版权/引用声明",
+   "how_to_fix": "JSON-LD 加 author 与 copyrightHolder，页脚写明转载要求",
+   "basis": "署名影响可信度判断"
+  },
+  {
+   "id": "L3-5",
+   "layer": "L3",
+   "layer_name": "可引用层",
+   "weight": 2,
+   "requirement": "内容时效真实（datePublished/dateModified 不造假、日期分散）",
+   "how_to_fix": "新发内容优先被爬；机器人批量同一天发布的日期会被判定为批量生成",
+   "basis": "新鲜度是排序与引用因素之一"
+  },
+  {
+   "id": "L3-6",
+   "layer": "L3",
+   "layer_name": "可引用层",
+   "weight": 2,
+   "requirement": "有 FAQPage 结构化（问句标题 + 直接回答）",
+   "how_to_fix": "把客户最常问的 3-5 个问题放页面底部，用 FAQ 结构化标注",
+   "basis": "FAQ 形态最贴近答案引擎的取数方式"
+  },
+  {
+   "id": "L3-7",
+   "layer": "L3",
+   "layer_name": "可引用层",
+   "weight": 2,
+   "requirement": "不依赖「投毒式」手段（不做虚假引用、不批量刷内容）",
+   "how_to_fix": "只做有真实依据的结构化答案",
+   "basis": "训练数据污染、检索劫持、批量刷引用是明确的红线；真实资质不可复制"
+  },
+  {
+   "id": "L4-1",
+   "layer": "L4",
+   "layer_name": "实体一致层",
+   "weight": 2,
+   "requirement": "官网是主阵地（内容在自有网站有完整一份）",
+   "how_to_fix": "每个平台发的内容，官网都要有一份更完整的版本",
+   "basis": "公开数据：官网被引用占比只涨不跌，是当前最高杠杆的阵地"
+  },
+  {
+   "id": "L4-2",
+   "layer": "L4",
+   "layer_name": "实体一致层",
+   "weight": 2,
+   "requirement": "跨平台简介与官网口径一致（公众号/CSDN/掘金/知乎等）",
+   "how_to_fix": "按实体事实卡逐平台核对名称、定位、服务范围",
+   "basis": "平台各说一套会让模型无法确认真实身份"
+  },
+  {
+   "id": "L4-3",
+   "layer": "L4",
+   "layer_name": "实体一致层",
+   "weight": 2,
+   "requirement": "官网上有可整段摘引的「我们是谁」事实段（名称、成立/起始时间、做什么、服务谁、边界）",
+   "how_to_fix": "在首页与关于页各放一段 3-6 行的事实陈述，不写形容词，只写可核对的事实",
+   "basis": "模型回答「这是什么公司」时，优先摘取现成的事实段；你自己不写，它就上网拼"
+  },
+  {
+   "id": "L4-4",
+   "layer": "L4",
+   "layer_name": "实体一致层",
+   "weight": 3,
+   "requirement": "在多个平台与多种内容形态上都有可被引用的存在（官网/百科/媒体/社区/社媒 + 图文/视频/播客）",
+   "how_to_fix": "重要内容一份放官网、一份改写成平台版本；视频与播客同样会被抓取（行业反馈：播客内容可被 AI 搜索收录）",
+   "basis": "案例经验：一个好品牌不会只在一个平台被提及；单一平台存在意味着单点信源"
+  },
+  {
+   "id": "L5-1",
+   "layer": "L5",
+   "layer_name": "索引与分发层",
+   "weight": 3,
+   "requirement": "已提交 sitemap 并做主动推送（搜索引擎 API / IndexNow / 百度推送）",
+   "how_to_fix": "先探接口返回的剩余配额再推，超发会被整批拒绝；其余进滚动队列",
+   "basis": "实测：配额型接口超发是「一条不收」，不是只收前几条"
+  },
+  {
+   "id": "L5-2",
+   "layer": "L5",
+   "layer_name": "索引与分发层",
+   "weight": 3,
+   "requirement": "新内容 24-48 小时内进入 sitemap / 索引/ 站内入口（三处一致）",
+   "how_to_fix": "每次发文后核对：实际页面数 = sitemap 条数 = llms.txt 索引条数 = 站内列表卡片数",
+   "basis": "新文发了但没进索引，等于大模型不知道它存在"
+  },
+  {
+   "id": "L5-3",
+   "layer": "L5",
+   "layer_name": "索引与分发层",
+   "weight": 2,
+   "requirement": "发内容的平台选的是「允许被抓取」的（自有站优先，公众号/知乎 robots 全禁）",
+   "how_to_fix": "把最重要的一份内容放在自己能控制、且允许抓取的站点上",
+   "basis": "公众号与知乎 robots 是 Disallow: /，大模型基本抓不到"
+  },
+  {
+   "id": "L5-4",
+   "layer": "L5",
+   "layer_name": "索引与分发层",
+   "weight": 2,
+   "requirement": "有 RSS/Feed 与更新信号，便于聚合器与爬虫发现新内容",
+   "how_to_fix": "输出 rss.xml 并在 llms.txt、页脚留下入口；新内容发布后同步更新",
+   "basis": "订阅源是低成本的新内容发现通道"
+  },
+  {
+   "id": "L5-5",
+   "layer": "L5",
+   "layer_name": "索引与分发层",
+   "weight": 3,
+   "requirement": "网站性能达标（首字节、完整加载速度）",
+   "how_to_fix": "先测核心页面的 TTFB 与总加载时间；图片压缩、静态化、上 CDN",
+   "basis": "性能在 AI 引用的影响因素里排位靠前（多份业内梳理都把网站性能列为引用因素之一）"
+  },
+  {
+   "id": "L5-6",
+   "layer": "L5",
+   "layer_name": "索引与分发层",
+   "weight": 3,
+   "requirement": "有可被引用的外部提及与权威外链（媒体、社区、行业目录、百科）",
+   "how_to_fix": "做能被引用的内容（数据、工具、标准对照表），让外部主动引用；而不是买链接",
+   "basis": "多份业内梳理把外链域名量列为 AI 引用影响力最大的因素之一 —— 权重高于站点内部技巧"
+  },
+  {
+   "id": "L6-1",
+   "layer": "L6",
+   "layer_name": "监测闭环层",
+   "weight": 3,
+   "requirement": "服务器日志按爬虫 UA 归因（剔除伪造 UA 的扫描器与本机自测流量）",
+   "how_to_fix": "统计时先剔掉打 .env、云元数据之类的扫描器；来源为本机 IP 的自测也要剔",
+   "basis": "不剔污染，会把「被扫描」读成「被 AI 青睐」"
+  },
+  {
+   "id": "L6-2",
+   "layer": "L6",
+   "layer_name": "监测闭环层",
+   "weight": 3,
+   "requirement": "定期做上游信源池探测（搜一个问题的结果里有没有你的域名/品牌）",
+   "how_to_fix": "固定一批问题，周期跑搜索，记录域名与品牌命中率的变化",
+   "basis": "池子里没有你 = 一定不会被引用；这是可自动化的最早期预警指标"
+  },
+  {
+   "id": "L6-3",
+   "layer": "L6",
+   "layer_name": "监测闭环层",
+   "weight": 2,
+   "requirement": "定期在主流 AI 平台逐题实测引用情况",
+   "how_to_fix": "固定问题清单，在多个 AI 平台人工提问，记录是否提及/引用你的站",
+   "basis": "最终效果只能实测，不能靠技术清单推断"
+  },
+  {
+   "id": "L6-4",
+   "layer": "L6",
+   "layer_name": "监测闭环层",
+   "weight": 2,
+   "requirement": "有周巡检与差异告警（命中率下降要报警）",
+   "how_to_fix": "把探测脚本挂上定时任务，与上一次结果对比出巡检行",
+   "basis": "没有告警的监测等于没有监测"
+  },
+  {
+   "id": "L7-1",
+   "layer": "L7",
+   "layer_name": "效果测量层",
+   "weight": 3,
+   "requirement": "有固定的问题集（Query 矩阵）作为测量基准，长期不变",
+   "how_to_fix": "先定 20-500 个问题，按品牌词/品类词/能力词/口碑词四类分；固定后不要随改",
+   "basis": "测量要可比，问题集一变，前后数据就没法比（来源：GEO 效果评估五大指标方法）"
+  },
+  {
+   "id": "L7-2",
+   "layer": "L7",
+   "layer_name": "效果测量层",
+   "weight": 3,
+   "requirement": "优化前跑过一遍基准线（baseline）并留存原始记录",
+   "how_to_fix": "开工前把五大指标在每个目标平台各测一轮，截图/存证；没基准线就无法证明效果",
+   "basis": "同行最常省略、却最容易翻车的一步：客户问“提升了吗”，你只有当下的数字"
+  },
+  {
+   "id": "L7-3",
+   "layer": "L7",
+   "layer_name": "效果测量层",
+   "weight": 3,
+   "requirement": "同一问题多轮重复提问取综合结果（不是问一次就下结论）",
+   "how_to_fix": "每个问题重复 7-8 次，看分布；避开模型大版本刚上线的不稳定期",
+   "basis": "模型回答是概率性的；单次快照不能作为结论（2026 批判性综述的核心方法建议）"
+  },
+  {
+   "id": "L7-4",
+   "layer": "L7",
+   "layer_name": "效果测量层",
+   "weight": 3,
+   "requirement": "分平台测量并做归因（豆包/DeepSeek/Kimi/元宝/文心/Perplexity…）",
+   "how_to_fix": "不同平台偏好差异大：豆包偏头条抖音系、DeepSeek 偏官方与技术文档、Kimi 偏长文结构、Perplexity 偏跨渠道一致",
+   "basis": "把多平台混成一个大数，会既看不出问题、也无法向客户交代"
+  },
+  {
+   "id": "L7-5",
+   "layer": "L7",
+   "layer_name": "效果测量层",
+   "weight": 3,
+   "requirement": "指标一：收录覆盖率 —— 品牌核心信息点被准确收录的比例",
+   "how_to_fix": "列出 20-50 个核心信息点，逐点在每个平台标准提问，算准确收录比",
+   "basis": "参考阈值：优化前常低于 30%，目标 80% 以上（来源：五大指标方法）"
+  },
+  {
+   "id": "L7-6",
+   "layer": "L7",
+   "layer_name": "效果测量层",
+   "weight": 3,
+   "requirement": "指标二：回答展现占比 —— 核心问询词下出现品牌（正向/中性）的比例",
+   "how_to_fix": "按四类问询词逐词提问；品牌词与品类词分开统计",
+   "basis": "品牌词参考 ≥80%；品类词需 3-6 个月（来源：五大指标方法）"
+  },
+  {
+   "id": "L7-7",
+   "layer": "L7",
+   "layer_name": "效果测量层",
+   "weight": 2,
+   "requirement": "指标三：信息准确率 —— AI 提到的品牌信息与事实卡一致的比例",
+   "how_to_fix": "把 AI 回答里涉及品牌的片段逐句与实体事实卡比对：准确/部分/错误/无法验证",
+   "basis": "优化前常低于 60%，目标 90% 以上；错误信息比不提及更伤（来源：五大指标方法）"
+  },
+  {
+   "id": "L7-8",
+   "layer": "L7",
+   "layer_name": "效果测量层",
+   "weight": 2,
+   "requirement": "指标四：正向提及占比（正向 / 中性 / 负面分布）",
+   "how_to_fix": "对回答中的品牌片段做情感标注，盯分布变化",
+   "basis": "健康区间参考：正向 ≥70%、负面 <10%（来源：五大指标方法）"
+  },
+  {
+   "id": "L7-9",
+   "layer": "L7",
+   "layer_name": "效果测量层",
+   "weight": 2,
+   "requirement": "指标五：负面信息频次下降率",
+   "how_to_fix": "优化前记录负面频次基准，之后按周/月同法复测",
+   "basis": "一般性负面 3-6 个月下降 ≥50%（来源：五大指标方法）"
+  },
+  {
+   "id": "L7-10",
+   "layer": "L7",
+   "layer_name": "效果测量层",
+   "weight": 2,
+   "requirement": "看“角色”而不只看“有没有被提到”：区分独立推荐 / 联合对比推荐 / 仅附带引用",
+   "how_to_fix": "把回答里的品牌出现位置分级统计：正文作为首选方案 > 与主流并列 > 只在角标或溯源链接里",
+   "basis": "只有角标引用、正文不出现 = 最低分；这套语义角色权重是最有说服力的对客证据（来源：腾讯云开发者社区测量体系文）"
+  },
+  {
+   "id": "L7-11",
+   "layer": "L7",
+   "layer_name": "效果测量层",
+   "weight": 2,
+   "requirement": "以“月”为最小评估单位、以“季度”为核心周期，不做周度成败判断",
+   "how_to_fix": "汇报节奏：收录期 1-4 周 → 初显 1-2 月 → 提升 2-4 月 → 稳定 4-6 月",
+   "basis": "周度波动判成败是最常见的误判（来源：GEO 效果评估周期方法）"
+  },
+  {
+   "id": "L7-12",
+   "layer": "L7",
+   "layer_name": "效果测量层",
+   "weight": 2,
+   "requirement": "业务侧有归因设计（品牌词搜索量、官网直接访问、线索来源字段）",
+   "how_to_fix": "在咨询表/客服话术里加一句“您是从哪里了解到我们的”，单独统计 AI 渠道",
+   "basis": "GEO 到成交是长链路，没有这一层就无法算 ROI（来源：五大指标的业务关联部分）"
+  },
+  {
+   "id": "L7-13",
+   "layer": "L7",
+   "layer_name": "效果测量层",
+   "weight": 2,
+   "requirement": "有异常告警与响应机制（语义漂移 / 竞品抢位 / 负面污染）",
+   "how_to_fix": "三件套：可见性骤降告警、竞品占位监测、负面语义入侵检测；触发后按事实卡校准并补权威语料",
+   "basis": "即使占位成功也会因模型迭代而自然流失，这是常态化风险（来源：腾讯云动态响应机制）"
+  }
+ ]
+}

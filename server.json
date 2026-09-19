@@ -1,0 +1,31 @@
+{
+ "name": "savantcat-geo-cn",
+ "title": "中文 AI 可引用性（GEO/AEO）工具包 · 合尘猫 SavantCat",
+ "description": "审计网站能否被中文 AI 搜索（豆包/DeepSeek/文心/元宝/Kimi）抓取、读懂、引用；含中国爬虫矩阵、边缘层拦截实测、信源池占位探测、五大指标与语义角色分权的可自验测量。",
+ "version": "1.0.0",
+ "license": "Apache-2.0",
+ "homepage": "https://savantcat.cn/geo-check.html",
+ "repository": {
+  "type": "git",
+  "url": "https://github.com/savantcat/mcp-geo-cn"
+ },
+ "runtime": {
+  "type": "python",
+  "entry": "server.py",
+  "args": [
+   "--transport",
+   "http",
+   "--host",
+   "127.0.0.1",
+   "--port",
+   "8767",
+   "--stateless"
+  ]
+ },
+ "tools": [
+  "audit_cn_citability",
+  "probe_source_pool",
+  "score_visibility",
+  "plan_fixes"
+ ]
+}
