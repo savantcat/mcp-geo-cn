@@ -3,3 +3,7 @@ __pycache__/
 .venv/
 audit_*.txt
 deploy_*.txt
+# 观测数据由 CLI 写入，不随仓库发布（运行期数据）
+data/observations.jsonl
+data/runs.jsonl
+data/signals.jsonl

@@ -10,14 +10,6 @@
   score_visibility     按五大指标 + 语义角色分权算分，输出可自验（附原文摘录）的测量报告
   plan_fixes           按缺口出优先修复计划（可单选某几项）
 
-  观测时序层（v1.1 起，全部只读）：
-  query_history        查某 identity 的历史观测时序（同一 series 内纵向比较）
-  diff_observations    对比最近两次观测，判提升/退化/中性（相对阈值 + 绝对地板 + 样本门槛）
-  list_signals         列出已检测到的变化信号（带 first_seen / resolved_at 生命周期）
-
-  ⚠️ 写入只走 CLI：`python server.py --record obs.json`。**MCP 工具一律只读**——
-     本服务是公网免 Key 端点，放开写等于允许任何人投毒观测数据。
-
 资源（知识走资源，不占工具位）：
   geo://playbook   geo://platform-profiles   geo://checklist
 
@@ -64,18 +56,7 @@ DEFAULT_ALLOWED_HOSTS = [
 ]
 RO_ANN = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True}
 
-SERVER_VERSION = "1.1.0"
-
-mcp = _MCPServer(
-    "savantcat-geo-cn",
-    title="\u5408\u5c18\u732b \u00b7 \u4e2d\u6587 AI \u53ef\u5f15\u7528\u6027 GEO/AEO \u4f53\u68c0",
-    description=(
-        "\u5ba1\u8ba1\u7f51\u7ad9\u80fd\u5426\u88ab AI \u641c\u7d22\u6293\u53d6\u3001\u8bfb\u61c2\u3001\u5f15\u7528\uff1b"
-        "\u4e94\u5927\u6307\u6807 + \u8bed\u4e49\u89d2\u8272\u5206\u6743\u8f93\u51fa\u53ef\u81ea\u9a8c\u7684\u6d4b\u91cf\u62a5\u544a\u3002"
-    ),
-    version=SERVER_VERSION,
-    website_url="https://savantcat.cn/mcp-geo",
-    instructions=(
+mcp = _MCPServer("savantcat-geo-cn", instructions=(
     "中文 AI 可引用性（GEO/AEO）工具包：审计网站能否被 AI 搜索抓取、读懂、引用，"
     "探测问题在中文信源池中的占位，并按五大指标 + 语义角色分权输出可自验的测量报告。"
     "评分是确定性的（scoring_version 随结果返回），不做 LLM 判定。每次输出都带 _provenance 溯源块（品牌/出处/指纹/授权要求）。"
@@ -470,278 +451,6 @@ def monthly_report(question: str, brand: str, platform: str) -> str:
             "3) 输出：五大指标、语义角色加权分、分平台对比、原文摘录（供客户自验）、下月动作。" % (brand, platform, question))
 
 
-# ---------------------------------------------------------------- 观测时序层（v1.1）
-# 设计要点（源自竞品源码级对比，见仓库 README「为什么这么做」）：
-#   1. 只存"事件行"，趋势现算——不存预聚合宽表（学 ansvisor prompt_results / limelit chat|mention|citation）
-#   2. 写只走 CLI（--record），**MCP 工具一律只读**：本服务是公网免 Key 端点，放开写=任何人可投毒
-#   3. 只在同一 series（同一题集/同一口径）内做前后对比，跨题集比较会造假信号
-#   4. 样本量门槛 n<MIN_N 一律标 low_n 且不给升降结论（学 limelit get_kpi_history）
-#   5. 阈值 = 相对比例 + 绝对地板双条件，防小基数放大
-OBS_FILE = os.path.join(DATA, "observations.jsonl")
-RUN_FILE = os.path.join(DATA, "runs.jsonl")
-SIG_FILE = os.path.join(DATA, "signals.jsonl")
-
-MIN_N = 20            # 样本量门槛
-REL_THRESHOLD = 0.20  # 相对变化阈值（20%）
-ABS_FLOOR = 0.05      # 绝对地板（百分点）
-
-
-def _now_iso():
-    import datetime
-    return datetime.datetime.now().astimezone().replace(microsecond=0).isoformat()
-
-
-def _read_jsonl(path):
-    if not os.path.exists(path):
-        return []
-    out = []
-    with io.open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out.append(json.loads(line))
-            except ValueError:
-                continue  # 坏行跳过：不让一条脏数据毒死整段历史
-    return out
-
-
-def _append_jsonl(path, rows):
-    with io.open(path, "a", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-
-def _classify(prev, cur, n):
-    """同一 series 内相邻两点的升降判定 -> (direction, severity, change, ratio)。
-
-    门槛：|相对变化| >= REL_THRESHOLD **且** |绝对变化| >= ABS_FLOOR 才算"显著"。
-    样本 n < MIN_N 一律返回 severity=low_n，**不给升降结论**。
-    """
-    try:
-        prev = float(prev)
-        cur = float(cur)
-    except (TypeError, ValueError):
-        return "unknown", "uncomparable", None, None
-    change = round(cur - prev, 6)
-    if prev == 0:
-        ratio = None
-        big = abs(change) >= ABS_FLOOR
-    else:
-        ratio = round(change / abs(prev), 4)
-        big = abs(ratio) >= REL_THRESHOLD and abs(change) >= ABS_FLOOR
-    if n is None or int(n) < MIN_N:
-        return ("flat" if change == 0 else ("up" if change > 0 else "down")), "low_n", change, ratio
-    if change == 0:
-        return "flat", "flat", change, ratio
-    if change > 0:
-        return "up", ("rise" if big else "rise_small"), change, ratio
-    return "down", ("sharp_drop" if big else "drop_small"), change, ratio
-
-
-def _group_obs(identity="", kind="", series=""):
-    groups = {}
-    for o in _read_jsonl(OBS_FILE):
-        if identity and o.get("identity") != identity:
-            continue
-        if kind and o.get("kind") != kind:
-            continue
-        s = o.get("series") or "default"
-        if series and s != series:
-            continue
-        groups.setdefault((o.get("kind"), s), []).append(o)
-    for rows in groups.values():
-        rows.sort(key=lambda r: r.get("ts") or "")
-    return groups
-
-
-def _recompute_signals():
-    """按 (identity, kind, series) 分组用相邻两点重算信号，整体重写 signals.jsonl。
-
-    同一 dedup_key 的未解决信号不重复追加，只更新 latest 值并保留 first_seen（学 ansvisor signals 生命周期）。
-    """
-    groups = {}
-    for o in _read_jsonl(OBS_FILE):
-        k = "%s|%s|%s" % (o.get("identity"), o.get("kind"), o.get("series") or "default")
-        groups.setdefault(k, []).append(o)
-    fresh = {}
-    for k, rows in groups.items():
-        rows.sort(key=lambda r: r.get("ts") or "")
-        if len(rows) < 2:
-            continue
-        prev, cur = rows[-2], rows[-1]
-        d, sev, ch, ra = _classify(prev.get("value"), cur.get("value"), cur.get("n"))
-        if d == "flat" and sev == "flat":
-            continue  # 无变化不产信号
-        fresh[k] = {
-            "dedup_key": k, "identity": prev.get("identity"), "kind": prev.get("kind"),
-            "series": prev.get("series") or "default",
-            "previous_value": prev.get("value"), "previous_ts": prev.get("ts"),
-            "current_value": cur.get("value"), "current_ts": cur.get("ts"),
-            "change_value": ch, "change_ratio": ra,
-            "direction": d, "severity": sev, "n": cur.get("n"),
-            "source": cur.get("source") or "",
-            "detected_at": _now_iso(), "resolved_at": None,
-        }
-    kept = [s for s in _read_jsonl(SIG_FILE) if s.get("resolved_at") is not None]
-    for k, s in fresh.items():
-        old = [x for x in _read_jsonl(SIG_FILE)
-               if x.get("dedup_key") == k and x.get("resolved_at") is None]
-        s["first_seen"] = (old[0].get("first_seen") or old[0].get("detected_at")) if old else s["detected_at"]
-        kept.append(s)
-    kept.sort(key=lambda s: (s.get("resolved_at") is not None, s.get("first_seen") or ""))
-    with io.open(SIG_FILE, "w", encoding="utf-8") as f:
-        for s in kept:
-            f.write(json.dumps(s, ensure_ascii=False) + "\n")
-    return len(fresh)
-
-
-def _record(path):
-    """CLI 写入口：把一次采样的观测追加进 observations.jsonl，再重算信号。"""
-    with io.open(path, encoding="utf-8") as f:
-        payload = json.load(f)
-    if isinstance(payload, list):
-        run, obs = {}, payload
-    else:
-        run, obs = payload.get("run") or {}, payload.get("observations") or []
-    import datetime as _d
-    run_id = run.get("run_id") or _d.datetime.now().strftime("%Y%m%d-%H%M%S")
-    ts_default = run.get("ts") or _now_iso()
-    rows, skipped = [], []
-    for o in obs:
-        if not o.get("identity") or not o.get("kind") or o.get("value") is None:
-            skipped.append(o)  # 缺字段不猜，原样跳过并计数
-            continue
-        rows.append({
-            "ts": o.get("ts") or ts_default, "run_id": run_id,
-            "identity": o.get("identity"), "kind": o.get("kind"),
-            "series": o.get("series") or run.get("series") or "default",
-            "value": o.get("value"), "unit": o.get("unit") or "ratio",
-            "n": o.get("n"), "source": o.get("source") or run.get("source") or "",
-            "note": o.get("note") or "",
-        })
-    _append_jsonl(OBS_FILE, rows)
-    _append_jsonl(RUN_FILE, [{"run_id": run_id, "ts": ts_default,
-                              "source": run.get("source") or "", "series": run.get("series") or "",
-                              "recorded": len(rows), "skipped": len(skipped),
-                              "note": run.get("note") or ""}])
-    n_sig = _recompute_signals()
-    print("run_id=%s 写入 %d 条观测（跳过 %d 条不完整）-> 信号 %d 条" % (run_id, len(rows), len(skipped), n_sig))
-    for o in rows:
-        print("  %-10s %-16s %-20s %-8s n=%s" % (o["identity"], o["kind"], o["series"], o["value"], o["n"]))
-    for o in skipped:
-        print("  [跳过] %s" % json.dumps(o, ensure_ascii=False)[:90])
-    return 0
-
-
-@mcp.tool(annotations=RO_ANN)
-def query_history(identity: str, kind: str = "", series: str = "", limit: int = 50) -> str:
-    """查某个品牌/域名在**历史观测**中的时序（多次采样的轨迹）。
-
-    数据来自本工作室按周期采样的记录（写入走 CLI，服务本身只读）。
-    **只在同一 series（同一题集/同一口径）内纵向比较**，不同 series 的值不可直接比大小。
-
-    Args:
-        identity: 品牌名或域名，如 "合尘猫" / "savantcat.cn"
-        kind: 观测类型，留空取全部。常用：mention_rate(提及率) / citation_rate(引用率) /
-              visibility_score(可见度分) / rank(排名) / robots_policy / llms_txt
-        series: 题集/口径标识，留空取全部
-        limit: 每条 series 最多返回的最新点数
-    """
-    groups = _group_obs(identity=identity, kind=kind, series=series)
-    out = []
-    for (k, s), rows in sorted(groups.items()):
-        last = rows[-1]
-        out.append({
-            "series": s, "kind": k, "points": len(rows),
-            "first_ts": rows[0].get("ts"), "last_ts": last.get("ts"),
-            "latest_value": last.get("value"), "latest_n": last.get("n"),
-            "low_n": (last.get("n") is None or int(last.get("n")) < MIN_N),
-            "sources": sorted({r.get("source") or "" for r in rows if r.get("source")}),
-            "values": [{"ts": r.get("ts"), "value": r.get("value"), "n": r.get("n"),
-                        "source": r.get("source")} for r in rows[-max(1, limit):]],
-        })
-    return _jd({
-        "_provenance": _provenance("query_history", [identity, kind, series]),
-        "identity": identity,
-        "series_count": len(out),
-        "series": out,
-        "sample_gate": MIN_N,
-        "note": ("样本量 n<%d 的点已标 low_n，不据此下升降结论；跨 series 数值不可直接比较。" % MIN_N),
-        "empty_hint": (None if out else
-                       "该 identity 暂无观测记录。观测由「合尘猫」按周期采样写入；如需为你的站点建立基线，"
-                       "请访问 https://savantcat.cn/geo-check.html 或联系我方。"),
-    })
-
-
-@mcp.tool(annotations=RO_ANN)
-def diff_observations(identity: str, kind: str = "", series: str = "") -> str:
-    """对比某 identity 的**最近两次观测**，判定提升/退化/中性（带阈值与样本门槛说明）。
-
-    判定门槛：相对变化 >= 20% **且** 绝对变化 >= 0.05 才算"显著"（severity: rise / sharp_drop）。
-    样本 n < 20 一律返回 severity=low_n，**不给出升降结论**——这是防误报的硬门。
-
-    Args:
-        identity: 品牌名或域名
-        kind: 观测类型，留空取全部
-        series: 题集/口径标识，留空取全部
-    """
-    groups = _group_obs(identity=identity, kind=kind, series=series)
-    results = []
-    for (k, s), rows in sorted(groups.items()):
-        if len(rows) < 2:
-            results.append({"kind": k, "series": s, "comparable": False,
-                            "reason": "仅 %d 个采样点，无法对比" % len(rows)})
-            continue
-        prev, cur = rows[-2], rows[-1]
-        d, sev, ch, ra = _classify(prev.get("value"), cur.get("value"), cur.get("n"))
-        results.append({
-            "kind": k, "series": s, "comparable": True,
-            "previous": {"ts": prev.get("ts"), "value": prev.get("value"), "n": prev.get("n")},
-            "current": {"ts": cur.get("ts"), "value": cur.get("value"), "n": cur.get("n")},
-            "change_value": ch, "change_ratio": ra,
-            "direction": d, "severity": sev,
-            "verdict": {
-                "rise": "显著提升", "rise_small": "小幅提升（未达显著门槛）",
-                "sharp_drop": "显著退化", "drop_small": "小幅退化（未达显著门槛）",
-                "flat": "基本持平", "low_n": "样本不足，不下结论",
-                "uncomparable": "口径不可比", "unknown": "无法判定",
-            }.get(sev, sev),
-        })
-    return _jd({
-        "_provenance": _provenance("diff_observations", [identity, kind, series]),
-        "identity": identity,
-        "thresholds": {"min_n": MIN_N, "relative_change": REL_THRESHOLD, "absolute_floor": ABS_FLOOR},
-        "results": results,
-        "note": "仅在同一 series 内做前后对比；跨题集比较会产生假信号，本工具不做。",
-    })
-
-
-@mcp.tool(annotations=RO_ANN)
-def list_signals(status: str = "open", limit: int = 50) -> str:
-    """列出**已检测到的变化信号**（visibility 提升/退化等），带生命周期（first_seen / resolved_at）。
-
-    Args:
-        status: open（未解决，默认）/ resolved（已解决）/ all
-        limit: 最多返回条数
-    """
-    rows = _read_jsonl(SIG_FILE)
-    if status == "open":
-        rows = [r for r in rows if r.get("resolved_at") is None]
-    elif status == "resolved":
-        rows = [r for r in rows if r.get("resolved_at") is not None]
-    rows = rows[-max(1, limit):]
-    return _jd({
-        "_provenance": _provenance("list_signals", [status]),
-        "status": status, "count": len(rows), "signals": rows,
-        "severity_scale": {"rise": "显著提升", "sharp_drop": "显著退化",
-                           "rise_small": "小幅提升", "drop_small": "小幅退化",
-                           "low_n": "样本不足，不下结论"},
-        "note": "信号由同一 series 的相邻两次观测按阈值+样本门槛判定；low_n 类不构成升降结论。",
-    })
-
-
 # ---------------------------------------------------------------- 入口
 def _selftest():
     r = json.loads(audit_cn_citability("https://savantcat.cn", include_raw=False))
@@ -763,22 +472,7 @@ def _selftest():
     print("[4] probe_source_pool   -> ok=%s verdict=%s" % (r4.get("ok"), (r4.get("verdict") or r4.get("error"))[:40]))
     print("[5] resources           -> checklist items=%d platforms=%d playbook=%d字" %
           (len(CHECKLIST.get("items", [])), len(PLATFORMS), len(PLAYBOOK)))
-    # 观测时序层：判定逻辑自检（纯函数，不写任何数据）
-    cases = [((0.0, 0.25, 20), "up", "rise"),            # 从 0 起跳且过地板 -> 显著提升
-             ((0.25, 0.0, 20), "down", "sharp_drop"),    # 归零 -> 显著退化
-             ((0.20, 0.22, 20), "up", "rise_small"),     # 相对只 +10% -> 未达门槛
-             ((0.0, 0.25, 5), "up", "low_n"),            # n=5 < 20 -> 一律不下结论
-             ((0.10, 0.10, 20), "flat", "flat")]         # 无变化
-    bad = [c for c in cases if _classify(*c[0])[0:2] != c[1:]]
-    print("[6] 时序判定自检        -> %s（%d 用例：显著/小幅分档 + low_n 样本门槛）" %
-          ("PASS" if not bad else "FAIL %s" % bad, len(cases)))
-    r6 = json.loads(query_history("合尘猫"))
-    print("[7] query_history       -> series=%d" % r6["series_count"])
-    r7 = json.loads(diff_observations("合尘猫"))
-    print("[8] diff_observations   -> results=%d" % len(r7["results"]))
-    r8 = json.loads(list_signals("all"))
-    print("[9] list_signals        -> count=%d" % r8["count"])
-    print("\n✅ 7 工具 + 3 资源自检完成（scoring_version=%s）" % SCORING_VERSION)
+    print("\n✅ 4 工具 + 3 资源自检完成（scoring_version=%s）" % SCORING_VERSION)
 
 
 def _transport_security():
@@ -796,14 +490,10 @@ def main():
     ap.add_argument("--path", default="/mcp")
     ap.add_argument("--stateless", action="store_true")
     ap.add_argument("--selftest", action="store_true")
-    ap.add_argument("--record", default="", metavar="JSON",
-                    help="把一次采样的观测写入 data/observations.jsonl 并重算信号（CLI 写入口）")
     a = ap.parse_args()
     if a.selftest:
         _selftest()
         return
-    if a.record:
-        sys.exit(_record(a.record))
     t = "streamable-http" if a.transport == "http" else a.transport
     if t == "stdio":
         mcp.run()

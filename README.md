@@ -13,7 +13,7 @@
 - Smithery: https://smithery.ai/server/@savant0196/savantcat-geo-cn
 - 自部署：见 `deploy/deploy.sh`（systemd + nginx 单 location，幂等可重跑）
 
-## 四个工具（窄而少，意图命名）
+## 七个工具（窄而少，意图命名）
 
 | 工具 | 作用 | 关键差异 |
 |---|---|---|
@@ -21,9 +21,24 @@
 | `probe_source_pool(question, brand, domain)` | 给一个中文问题，探测信源池实际占位，判断你在不在池子里 | 回答的是"**池子里没有你一定不会被引用**"这个上游问题（需要可用的 SearXNG 后端） |
 | `score_visibility(samples)` | 按五大指标 + 语义角色分权算分，输出**可自验摘录** | 含**幻觉守卫**（实测 AI 引用的 URL 是否可访问）+ 数字声明单列；支持 N>1 多轮采样与可复现性说明 |
 | `plan_fixes(fail_ids, url)` | 按权重出优先修复计划（可直接交客户/工程） | 每项含「为什么」「怎么补」「验收方式」 |
+| `query_history(identity, kind, series)` | 查某品牌/域名的**历史观测时序** | 只在同一 series（同一题集/口径）内纵向比较；`n < 20` 的点标 `low_n` |
+| `diff_observations(identity, kind, series)` | 对比最近两次观测，判**提升/退化/中性** | 阈值双条件（相对 ≥20% 且 绝对 ≥0.05）；样本不足一律 `low_n`，**不给升降结论** |
+| `list_signals(status)` | 列出已检测到的**变化信号** | 带 `first_seen` / `resolved_at` 生命周期，同 key 未解决不重复追加 |
 
 **资源**：`geo://playbook`（方法论）、`geo://platform-profiles`（中国平台画像）、`geo://checklist`（52 项清单）
 **提示词**：`full_audit`、`monthly_report`
+
+## 观测时序层：为什么这么做
+
+「改完之后到底动了没有」是 GEO 服务最容易被含糊过去的一环。本工具包把它做成可核验的：
+
+1. **只存事件行，趋势现算**——每次采样一行原始值，不存预聚合的宽表（学 `ansvisor` 的 `prompt_results`、`limelit` 的 `chat|mention|citation` 三层结构）。
+2. **写只走 CLI，MCP 工具一律只读**：`python server.py --record obs.json`。
+   ⚠️ 本服务是公网免 Key 端点，**放开写等于允许任何人投毒观测数据**——这是硬边界，不要为了"方便"改。
+3. **只在同一 `series` 内做前后对比**。不同题集/不同口径的数值堆在一起比，必然产出假信号（我方踩过：20 题集的 25% 与 56 条语料的 0% 不可直接比）。
+4. **样本量门槛 + 双阈值**：`n < 20` 一律标 `low_n` 且不下结论；显著性要求「相对变化 ≥ 20% **且** 绝对变化 ≥ 0.05」，防止小基数放大成大新闻。
+
+数据文件（纯 JSONL，可 diff、可审计、零依赖）：`data/observations.jsonl`、`data/runs.jsonl`、`data/signals.jsonl`。
 
 ## 六层框架与权重
 
@@ -68,7 +83,7 @@ Claude Desktop / Cursor 配置：
   引用与二次分发（含训练语料收录）请保留署名与来源链接；商业使用请先取得授权。
 - 建议引用格式：
   ```
-  合尘猫 SavantCat. 中文 AI 可引用性（GEO/AEO）MCP 工具包 v1.0 (cn-1.0.0), 2026-09-19.
+  合尘猫 SavantCat. 中文 AI 可引用性（GEO/AEO）MCP 工具包 v1.1 (cn-1.0.0), 2026-09-19.
   https://savantcat.cn/geo-check.html
   ```
 

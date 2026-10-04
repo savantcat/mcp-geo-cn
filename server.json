@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "cn.savantcat/geo-cn",
   "title": "中文 AI 可引用性（GEO/AEO）体检",
-  "description": "中文站能否被豆包/DeepSeek/文心/Kimi 抓取、读懂、引用：可引用性审计、信源池占位探测、五大指标测量、修复计划",
-  "version": "1.0.0",
+  "description": "中文站能否被豆包/DeepSeek/文心/Kimi 抓取、读懂、引用：可引用性审计、信源池占位探测、五大指标测量、修复计划、观测时序追踪",
+  "version": "1.1.0",
   "websiteUrl": "https://savantcat.cn/mcp-geo.html",
   "repository": {
     "url": "https://github.com/savantcat/mcp-geo-cn",

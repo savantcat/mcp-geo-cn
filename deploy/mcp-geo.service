@@ -8,6 +8,7 @@ Type=simple
 User=root
 WorkingDirectory=/opt/mcp-geo
 Environment=GEO_SEARX_URL=http://127.0.0.1:8081
+Environment=GEO_SEARX_ENGINES=quark,360search
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3.11 /opt/mcp-geo/server.py --transport http --host 127.0.0.1 --port 8767 --stateless
 Restart=always
