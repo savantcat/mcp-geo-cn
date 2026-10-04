@@ -1,0 +1,7 @@
+# Hermes Agent — 放进 config.yaml 的 mcp_servers 段
+mcp_servers:
+  savantcat-geo:
+    connect_timeout: 20
+    enabled: true
+    timeout: 120
+    url: https://savantcat.cn/mcp-geo

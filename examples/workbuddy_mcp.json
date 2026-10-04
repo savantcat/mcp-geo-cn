@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "savantcat-geo": {
+      "type": "http",
+      "url": "https://savantcat.cn/mcp-geo"
+    }
+  }
+}
