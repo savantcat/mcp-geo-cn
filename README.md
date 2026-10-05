@@ -5,6 +5,8 @@
 > 不做第二个通用 GEO 审计器 —— 国外同类已成熟（`seo-geo-mcp-server`、`growth-mcp`、`StudioMeyer GEO`），
 > 本项目把它们的评分条款在中国场景下重写，并补上中国专属部分：中国爬虫矩阵、边缘层拦截实测、中文 slug 陷阱、信源池占位、可自验报告。
 
+[![M8ven Verified](https://m8ven.ai/badge/mcp/savantcat/mcp-geo-cn)](https://m8ven.ai/mcp/savantcat/mcp-geo-cn?s=readme)
+
 ## 免部署直接用
 
 托管端点（Streamable HTTP，免 Key）：`https://savantcat.cn/mcp-geo`
