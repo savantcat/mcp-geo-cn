@@ -45,7 +45,8 @@ def test_mark_module_is_vendored_and_in_sync():
     if not os.path.exists(canon):
         return   # CI 里没有真源目录，跳过
     def h(f):
-        return hashlib.sha256(open(f, "rb").read()).hexdigest()
+        # 换行归一：git 检出可能把 LF 变 CRLF，字节不同但内容等价
+        return hashlib.sha256(open(f, "rb").read().replace(b"\r\n", b"\n")).hexdigest()
     assert h(src) == h(canon), "vendor 副本与真源不一致，跑 tools/sync_mark.py 同步"
 
 
