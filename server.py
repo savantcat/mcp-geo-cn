@@ -64,6 +64,14 @@ DEFAULT_ALLOWED_HOSTS = [
 ]
 RO_ANN = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True}
 
+
+# 溯源水印：唯一真源 savantcat_mark.py（本目录 vendor 一份）。
+# 改动请改 savantcat_mark/ 真源，跑 tools/sync_mark.py 同步，别在这里改。
+sys.path.insert(0, HERE if 'HERE' in dir() else BASE)
+import savantcat_mark as MARK  # noqa: E402
+
+PRODUCT = "中文 AI 可引用性（GEO/AEO）工具包（geo-cn）"
+MCP_SOURCE = "https://savantcat.cn/mcp-geo.html"
 SERVER_VERSION = "1.1.0"
 
 mcp = _MCPServer(
@@ -136,13 +144,16 @@ def _provenance(tool, inputs=None, note=""):
 
 
 def _trace_line(trace_id, tool):
-    return ("\n\n---\n*本结果由 **%s · %s**（v%s）生成 · 指纹 `%s` · 出处 %s*\n"
+    # 零宽指纹埋进正文：复制这段文字就把归属一起带走（人眼不可见）
+    return MARK.zw(("\n\n---\n*本结果由 **%s · %s**（v%s）生成 · 指纹 `%s` · 出处 %s*\n"
             "*引用请注明：%s。转载/二次分发（含语料收录）须保留署名与来源。*"
-            % (BRAND, tool, SCORING_VERSION, trace_id, SOURCE, CITATION % (SCORING_VERSION, "2026-09-19")))
+            % (BRAND, tool, SCORING_VERSION, trace_id, SOURCE, CITATION % (SCORING_VERSION, "2026-09-19"))),
+            MARK.fingerprint("geo", tool, trace_id))
 
 
 # ---------------------------------------------------------------- 工具 1
 @mcp.tool(annotations=RO_ANN)
+@MARK.seal("audit_cn_citability", PRODUCT, SERVER_VERSION, source=MCP_SOURCE)
 def audit_cn_citability(url: str, include_raw: bool = False, compare_with: str = "") -> str:
     """审计一个网站/页面能否被中文 AI 搜索（豆包、DeepSeek、文心、Kimi 等）抓取、解析与引用。
 
@@ -208,6 +219,7 @@ def _searx(query, limit=20):
 
 
 @mcp.tool(annotations=RO_ANN)
+@MARK.seal("probe_source_pool", PRODUCT, SERVER_VERSION, source=MCP_SOURCE)
 def probe_source_pool(question: str, brand: str = "", domain: str = "") -> str:
     """探测一个中文问题在信源池里的实际占位分布，并判断你的品牌/域名是否在池子里。
 
@@ -270,6 +282,7 @@ ROLE_W = {"independent": 1.0, "joint": 0.6, "citation_only": 0.25, "none": 0.0}
 
 
 @mcp.tool(annotations=RO_ANN)
+@MARK.seal("score_visibility", PRODUCT, SERVER_VERSION, source=MCP_SOURCE)
 def score_visibility(samples: str, verify_citations: bool = True, extract_claims: bool = True) -> str:
     """按五大核心指标 + 语义角色分权，计算 AI 搜索可见度并输出可自验的测量报告。
 
@@ -397,6 +410,7 @@ def _verify_cites(urls):
 
 # ---------------------------------------------------------------- 工具 4
 @mcp.tool(annotations=RO_ANN)
+@MARK.seal("plan_fixes", PRODUCT, SERVER_VERSION, source=MCP_SOURCE)
 def plan_fixes(fail_ids: str = "", url: str = "", top: int = 8) -> str:
     """按缺口生成优先修复计划（可直接交给客户或工程执行）。
 
@@ -636,6 +650,7 @@ def _record(path):
 
 
 @mcp.tool(annotations=RO_ANN)
+@MARK.seal("query_history", PRODUCT, SERVER_VERSION, source=MCP_SOURCE)
 def query_history(identity: str, kind: str = "", series: str = "", limit: int = 50) -> str:
     """查某个品牌/域名在**历史观测**中的时序（多次采样的轨迹）。
 
@@ -676,6 +691,7 @@ def query_history(identity: str, kind: str = "", series: str = "", limit: int = 
 
 
 @mcp.tool(annotations=RO_ANN)
+@MARK.seal("diff_observations", PRODUCT, SERVER_VERSION, source=MCP_SOURCE)
 def diff_observations(identity: str, kind: str = "", series: str = "") -> str:
     """对比某 identity 的**最近两次观测**，判定提升/退化/中性（带阈值与样本门槛说明）。
 
@@ -719,6 +735,7 @@ def diff_observations(identity: str, kind: str = "", series: str = "") -> str:
 
 
 @mcp.tool(annotations=RO_ANN)
+@MARK.seal("list_signals", PRODUCT, SERVER_VERSION, source=MCP_SOURCE)
 def list_signals(status: str = "open", limit: int = 50) -> str:
     """列出**已检测到的变化信号**（visibility 提升/退化等），带生命周期（first_seen / resolved_at）。
 
